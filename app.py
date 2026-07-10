@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import psycopg2
 import re
-import random
 
 if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
@@ -15,8 +14,7 @@ if "seller_logged_in" not in st.session_state:
 # ======================================================
 @st.cache_resource
 def get_connection():
-
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=st.secrets["DB_HOST"],
         database=st.secrets["DB_NAME"],
         user=st.secrets["DB_USER"],
@@ -24,11 +22,18 @@ def get_connection():
         port=st.secrets["DB_PORT"]
     )
 
-    return conn
+def get_cursor():
+    conn = get_connection()
+    
+    try:
+        conn.isolation_level  # simple check if alive
+    except Exception:
+        st.cache_resource.clear()  # clear the dead cached connection
+        conn = get_connection()    # get a fresh one
+    
+    return conn, conn.cursor()
 
-conn = get_connection()
-
-cursor = conn.cursor()
+conn, cursor = get_cursor()
 
 # ======================================================
 # LOGIN SECTION
@@ -71,8 +76,8 @@ if role == "Admin":
         ):
 
             if (
-                admin_id == "admin"
-                and admin_password == "admin"
+                admin_id == st.secrets["ADMIN_ID"]
+                and admin_password == st.secrets["ADMIN_PASSWORD"]
             ):
 
                 st.session_state.admin_logged_in = True
@@ -496,6 +501,72 @@ if role == "Admin":
                 use_container_width=True
             )
 
+        # ==================================================
+        # DELETE PRODUCT
+        # ==================================================
+
+        with st.expander("🗑️ Delete Product"):
+
+            delete_product_id = st.number_input(
+                "Enter Product ID to Delete",
+                step=1,
+                min_value=1,
+                key="delete_product_id"
+            )
+
+            if st.button(
+                "Fetch Product",
+                key="fetch_delete_product_btn"
+            ):
+
+                fetch_delete_query = """
+                SELECT product_id, product_name, category, price, stock_quantity
+                FROM products
+                WHERE product_id = %s
+                """
+
+                conn, _ = get_cursor()
+
+                delete_df = pd.read_sql(
+                    fetch_delete_query,
+                    conn,
+                    params=[delete_product_id]
+                )
+
+                if not delete_df.empty:
+                    st.session_state.delete_product_data = delete_df.iloc[0]
+                else:
+                    st.error("Product Not Found")
+
+            if "delete_product_data" in st.session_state:
+
+                product = st.session_state.delete_product_data
+
+                st.warning(
+                    f"⚠️ Are you sure you want to delete: "
+                    f"**{product['product_name']}** "
+                    f"(ID: {product['product_id']})"
+                )
+
+                if st.button(
+                    "Yes, Delete Product",
+                    key="confirm_delete_btn"
+                ):
+
+                    delete_query = """
+                    DELETE FROM products
+                    WHERE product_id = %s
+                    """
+
+                    conn, cursor = get_cursor()
+                    cursor.execute(delete_query, (delete_product_id,))
+                    conn.commit()
+                    cursor.close()
+
+                    del st.session_state.delete_product_data
+
+                    st.success("Product Deleted Successfully")
+
             # ==================================================
             # TOP PURCHASED PRODUCTS
             # ==================================================
@@ -701,7 +772,7 @@ if role == "Seller":
                             new_contact_person,
                             new_phone,
                             new_email,
-                            new_city
+                            new_city,
                         )
                     )
 
